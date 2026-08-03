@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   GraduationCap, School, Settings as SettingsIcon, Sun, Moon, ShieldCheck, Download,
-  Upload, RotateCcw, Info, Save,
+  Upload, RotateCcw, Info, Save, Cloud, LogOut, CheckCircle2,
 } from "lucide-react";
 import { ConfirmDialog } from "../../components/common";
 import { todayISO } from "../../lib/dateUtils";
 import { logActivity } from "../../lib/aggregations";
+import { isCloudSyncConfigured } from "../../lib/supabaseClient";
 
-function SettingsView({ db, mutate, toast, onResetSeed }) {
+function SettingsView({ db, mutate, toast, onResetSeed, cloudEmail, onSignOut }) {
   const s = db.settings;
   const [form, setForm] = useState(s);
   const [confirmRestore, setConfirmRestore] = useState(null);
@@ -115,11 +116,29 @@ function SettingsView({ db, mutate, toast, onResetSeed }) {
             </div>
           </div>
 
+          {isCloudSyncConfigured && (
+            <div className="pd-card pd-card-pad" style={{ marginBottom: 16 }}>
+              <div className="pd-section-title"><Cloud size={16} color="var(--navy)" /> Sinkronisasi Online</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--success)", fontWeight: 600, marginBottom: 10 }}>
+                <CheckCircle2 size={15} /> Aktif — data tersinkron otomatis
+              </div>
+              <p style={{ fontSize: 12.5, color: "var(--muted)", lineHeight: 1.6, marginTop: 0 }}>
+                Masuk sebagai <strong style={{ color: "var(--ink)" }}>{cloudEmail || "—"}</strong>. Semua orang yang masuk
+                dengan akun yang sama akan melihat data yang sama, dan perubahan yang disimpan di satu perangkat akan
+                muncul otomatis di perangkat lain.
+              </p>
+              {onSignOut && (
+                <button className="pd-btn pd-btn-ghost" onClick={onSignOut}><LogOut size={14} /> Keluar</button>
+              )}
+            </div>
+          )}
+
           <div className="pd-card pd-card-pad" style={{ marginBottom: 16 }}>
             <div className="pd-section-title"><ShieldCheck size={16} color="var(--navy)" /> Cadangan Data (Backup)</div>
             <p style={{ fontSize: 12.5, color: "var(--muted)", lineHeight: 1.6, marginTop: 0 }}>
-              Seluruh data — kelas, siswa, presensi, jurnal, dan jadwal — tersimpan otomatis di perangkat ini.
-              Unduh cadangan secara berkala agar data tetap aman.
+              {isCloudSyncConfigured
+                ? "Selain tersinkron online, Anda tetap bisa mengunduh cadangan file .json kapan saja sebagai lapisan pengaman tambahan."
+                : "Seluruh data — kelas, siswa, presensi, jurnal, dan jadwal — tersimpan otomatis di perangkat ini. Unduh cadangan secara berkala agar data tetap aman."}
             </p>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <button className="pd-btn pd-btn-soft" onClick={exportBackup}><Download size={14} /> Unduh Backup (.json)</button>

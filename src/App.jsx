@@ -6,12 +6,15 @@ import { buildInitialDB } from "./data/seedData";
 import { uid, deepClone } from "./lib/idUtils";
 import { todayISO, dayNameFromISO } from "./lib/dateUtils";
 import { scheduleForDay, sessionStatusFor } from "./lib/aggregations";
-import { loadDB, saveDB } from "./lib/storage";
+import { loadDB, saveDB, subscribeToRemoteChanges } from "./lib/storage";
+import { isCloudSyncConfigured } from "./lib/supabaseClient";
+import { getSession, onAuthChange, signOut as authSignOut } from "./lib/auth";
 
 import { ToastStack, ErrorBoundary } from "./components/common";
 import Sidebar from "./components/layout/Sidebar";
 import TopBar from "./components/layout/TopBar";
 import BottomNav from "./components/layout/BottomNav";
+import LoginScreen from "./features/auth/LoginScreen";
 
 import Dashboard from "./features/dashboard/Dashboard";
 import ScheduleView from "./features/schedule/ScheduleView";
@@ -25,6 +28,11 @@ import ReportsView from "./features/reports/ReportsView";
 import SettingsView from "./features/settings/SettingsView";
 
 export default function PresensiDeutschApp() {
+  // --- auth (only meaningful when cloud sync is configured; see lib/auth.js) ---
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authed, setAuthed] = useState(false);
+  const [userEmail, setUserEmail] = useState(null);
+
   const [db, setDb] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("dashboard");
@@ -40,8 +48,29 @@ export default function PresensiDeutschApp() {
   const [studentModalTrigger, setStudentModalTrigger] = useState(0);
 
   const saveTimer = useRef(null);
+  const skipNextRemoteSave = useRef(false);
 
+  // Check (and subscribe to) auth state once on mount.
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const s = await getSession();
+      if (cancelled) return;
+      setAuthed(s.signedIn);
+      setUserEmail(s.email);
+      setAuthChecked(true);
+    })();
+    const unsubscribe = onAuthChange((s) => {
+      setAuthed(s.signedIn);
+      setUserEmail(s.email);
+    });
+    return () => { cancelled = true; unsubscribe(); };
+  }, []);
+
+  // Load the app's data once we know whether we're allowed to (cloud sync
+  // requires being signed in first; local/artifact storage doesn't).
+  useEffect(() => {
+    if (!authChecked || (isCloudSyncConfigured && !authed)) return;
     let cancelled = false;
     (async () => {
       const stored = await loadDB();
@@ -50,14 +79,30 @@ export default function PresensiDeutschApp() {
       setLoaded(true);
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [authChecked, authed]);
 
+  // Debounced save on local changes.
   useEffect(() => {
     if (!loaded || !db) return;
+    if (skipNextRemoteSave.current) { skipNextRemoteSave.current = false; return; }
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => { saveDB(db); }, 400);
+    saveTimer.current = setTimeout(() => { saveDB(db, userEmail); }, 400);
     return () => clearTimeout(saveTimer.current);
-  }, [db, loaded]);
+  }, [db, loaded, userEmail]);
+
+  // Cloud sync: pick up changes saved by other signed-in people/devices
+  // without needing a manual refresh (see lib/storage.js). No-op when
+  // cloud sync isn't configured.
+  useEffect(() => {
+    if (!loaded) return;
+    const unsubscribe = subscribeToRemoteChanges((remoteDb) => {
+      skipNextRemoteSave.current = true; // don't re-save what we just received
+      setDb(remoteDb);
+      toast("Data diperbarui dari perangkat lain", "success");
+    });
+    return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
 
   const toast = useCallback((message, type) => {
     const id = uid("toast");
@@ -117,6 +162,12 @@ export default function PresensiDeutschApp() {
     toast("Data contoh berhasil dimuat ulang", "success");
   }
 
+  async function handleSignOut() {
+    await authSignOut();
+    setDb(null);
+    setLoaded(false);
+  }
+
   useEffect(() => {
     function onKey(e) {
       if (e.key === "Escape") { setFabOpen(false); setMobileOpen(false); }
@@ -128,6 +179,23 @@ export default function PresensiDeutschApp() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [db]);
+
+  // --- auth gate: only relevant when cloud sync is configured ---
+  if (isCloudSyncConfigured && !authChecked) {
+    return (
+      <div className="pd-root" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 420 }}>
+        <style>{GLOBAL_CSS}</style>
+      </div>
+    );
+  }
+  if (isCloudSyncConfigured && !authed) {
+    return (
+      <div className="pd-root">
+        <style>{GLOBAL_CSS}</style>
+        <LoginScreen onSignedIn={() => {}} />
+      </div>
+    );
+  }
 
   if (!loaded || !db) {
     return (
@@ -158,7 +226,7 @@ export default function PresensiDeutschApp() {
   }
   else if (view === "journal") content = <JournalView db={db} mutate={mutate} toast={toast} prefill={journalPrefill} clearPrefill={() => setJournalPrefill(null)} />;
   else if (view === "reports") content = <ReportsView db={db} />;
-  else if (view === "settings") content = <SettingsView db={db} mutate={mutate} toast={toast} onResetSeed={resetSeed} />;
+  else if (view === "settings") content = <SettingsView db={db} mutate={mutate} toast={toast} onResetSeed={resetSeed} cloudEmail={userEmail} onSignOut={isCloudSyncConfigured ? handleSignOut : null} />;
 
   const themeClass = db.settings.theme === "dark" ? "dark" : "";
 
